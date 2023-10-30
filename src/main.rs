@@ -2,38 +2,7 @@ use std::{env, fs};
 
 use anyhow::{anyhow, bail};
 use ignore::{types::TypesBuilder, WalkBuilder, WalkState};
-use tree_sitter::{Node, Parser, Query, QueryCursor};
-
-const TEST_SOURCE: &str = r#"
-// swift-tools-version: 5.7
-// The swift-tools-version declares the minimum version of Swift required to build this package.
-
-import PackageDescription
-
-let package = Package(
-    name: "AppFeatures",
-    products: [
-        // Products define the executables and libraries a package produces, and make them visible to other packages.
-        .library(
-            name: "AppFeatures",
-            targets: ["AppFeatures"]),
-    ],
-    dependencies: [
-        .package(path: "ResourceDownloader"),
-        .package(path: "UserFeature")
-    ],
-    targets: [
-        // Targets are the basic building blocks of a package. A target can define a module or a test suite.
-        // Targets can depend on other targets in this package, and on products in packages this package depends on.
-        .target(
-            name: "AppFeatures",
-            dependencies: ["ResourceDownloader", "UserFeature"]),
-        .testTarget(
-            name: "AppFeaturesTests",
-            dependencies: ["AppFeatures"]),
-    ]
-)
-"#;
+use tree_sitter::{Node, Query, QueryCursor};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
