@@ -1,6 +1,10 @@
-use tree_sitter::{Node, Query, QueryCursor};
+use std::{env, fs};
 
-const test_source: &str = r#"
+use anyhow::{anyhow, bail};
+use ignore::{types::TypesBuilder, WalkBuilder, WalkState};
+use tree_sitter::{Node, Parser, Query, QueryCursor};
+
+const TEST_SOURCE: &str = r#"
 // swift-tools-version: 5.7
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
@@ -31,49 +35,85 @@ let package = Package(
 )
 "#;
 
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    let path = &args[1];
+
+    let mut builder = TypesBuilder::new();
+    builder
+        .add_defaults()
+        .add("swiftpackage", "Package.swift")
+        .expect("Can't add package.swift matcher");
+
+    let matcher = builder
+        .select("swiftpackage")
+        .build()
+        .expect("can't build swift matcher");
+
+    let walk = WalkBuilder::new(path).types(matcher).build_parallel();
+
+    walk.run(|| {
+        Box::new(move |result| {
+            if let Ok(dent) = result {
+                if let Some(ftype) = dent.file_type() {
+                    if !ftype.is_dir() {
+                        let source = fs::read_to_string(dent.path()).expect("Can't read file");
+                        let name = get_package_name(&source).expect("Cant't work out package name");
+
+                        println!(
+                            "Package '{}' with path prefix: {:?}",
+                            name,
+                            dent.path().parent().unwrap()
+                        );
+                    }
+                }
+            }
+
+            WalkState::Continue
+        })
+    })
+}
+
 // Matches a package name in a Package.swift file
-const package_name_query: &str = r#"
+const PACKAGE_NAME_QUERY: &str = r#"
 (call_expression
     (simple_identifier) @call_ident (#eq? @call_ident "Package")
     (call_suffix
         (value_arguments
             (value_argument
-                (simple_identifier) @name (#eq? @name "name")
+                (simple_identifier) @name_arg (#eq? @name_arg "name")
                 (line_string_literal
                     (line_str_text) @package_name)))))
 "#;
 
-fn main() {
+fn get_package_name(source: &str) -> anyhow::Result<String> {
     let mut parser = tree_sitter::Parser::new();
     let swift_language = tree_sitter_swift::language();
     parser
         .set_language(swift_language)
         .expect("failed to set swift language");
 
-    // Parse a tree
+    let tree = parser.parse(source, None).expect("Couldn't parse the code");
 
-    let tree = parser
-        .parse(test_source, None)
-        .expect("Couldn't parse the code");
-
-    print_node(tree.root_node());
-
-    // Test a query
-
-    let query = Query::new(swift_language, package_name_query).expect("failed parsing query");
+    // FIXME: No need to do this every time
+    let query = Query::new(swift_language, PACKAGE_NAME_QUERY).expect("failed parsing query");
     let mut query_cursor = QueryCursor::new();
 
-    for a_match in query_cursor.matches(&query, tree.root_node(), test_source.as_bytes()) {
-        println!("\n\n# New match:");
+    let first_match = query_cursor
+        .matches(&query, tree.root_node(), source.as_bytes())
+        .next()
+        .ok_or_else(|| anyhow!("No matches for Package declaration"))?;
 
-        for capture in a_match.captures {
-            println!("\n## New capture ({}): ", capture.index);
-            print_node(capture.node);
+    for capture in first_match.captures {
+        if capture.index == 2 {
+            return Ok(source[capture.node.byte_range()].to_string());
         }
     }
+
+    bail!("No matches for Package declaration")
 }
 
-fn print_node(node: Node) {
+fn print_node(node: Node, source: &str) {
     let mut depth = 0;
     let mut cursor = node.walk();
 
@@ -85,7 +125,7 @@ fn print_node(node: Node) {
         if node.child_count() < 1 {
             println!(
                 " '{}' {} .. {}",
-                &test_source[node.byte_range()],
+                &source[node.byte_range()],
                 node.start_position(),
                 node.end_position(),
             );
