@@ -3,8 +3,8 @@ mod worker;
 
 use std::{path::PathBuf, thread};
 
-use crossbeam::channel::{unbounded, Receiver};
-use ignore::{types::TypesBuilder, WalkBuilder, WalkState};
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use ignore::{types::TypesBuilder, WalkBuilder, WalkParallel, WalkState};
 use index::Index;
 use worker::{Task, TaskResult, Worker};
 
@@ -39,6 +39,25 @@ impl Drake {
         let (task_tx, task_rx) = unbounded();
         let (result_tx, result_rx) = unbounded();
 
+        self.start_walk(walk, task_tx, result_tx);
+
+        let n = num_cpus::get();
+        for _ in 0..n {
+            self.start_worker(task_rx.clone());
+        }
+
+        while let Ok(result) = result_rx.recv() {
+            match result {
+                TaskResult::Package(package) => self.index.add_package(package),
+            }
+        }
+
+        println!("Done. Index: {:#?}", self.index);
+
+        Ok(())
+    }
+
+    fn start_walk(&self, walk: WalkParallel, task_tx: Sender<Task>, result_tx: Sender<TaskResult>) {
         walk.run(|| {
             let task_tx = task_tx.clone();
             let result_tx = result_tx.clone();
@@ -57,24 +76,6 @@ impl Drake {
                 WalkState::Continue
             })
         });
-
-        drop(task_tx);
-        drop(result_tx);
-
-        let n = num_cpus::get();
-        for _ in 0..n {
-            self.start_worker(task_rx.clone());
-        }
-
-        while let Ok(result) = result_rx.recv() {
-            match result {
-                TaskResult::Package(package) => self.index.add_package(package),
-            }
-        }
-
-        println!("Done. Index: {:#?}", self.index);
-
-        Ok(())
     }
 
     fn start_worker(&self, tasks: Receiver<Task>) {
