@@ -17,6 +17,7 @@ pub struct Package {
     prefix: PathBuf,
 }
 
+#[derive(Default)]
 pub struct Drake {
     index: Index,
 }

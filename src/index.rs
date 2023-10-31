@@ -7,7 +7,7 @@ use crate::Package;
 // PackageId is an offset into the list of known packages
 pub type PackageId = usize;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Index {
     // Known packages. Offset is used as PackageId
     packages: Vec<Package>,
