@@ -30,33 +30,55 @@ enum TaskResult {
 type PackageId = usize;
 
 // Search index
+#[derive(Debug)]
 struct Index {
     // Known packages. Offset is used as PackageId
     packages: Vec<Package>,
     // Find a package by name (e.g. for import)
     packages_by_name: HashMap<String, PackageId>,
     // Find a package by file path prefix
-    packages_by_path: GenericPatriciaMap<PathBuf, PackageId>,
+    packages_by_path: GenericPatriciaMap<String, PackageId>,
+}
+
+impl Index {
+    fn new() -> Self {
+        Self {
+            packages: vec![],
+            packages_by_name: HashMap::new(),
+            packages_by_path: GenericPatriciaMap::new(),
+        }
+    }
+
+    fn add_package(&mut self, package: Package) {
+        let name = package.name.clone();
+        let path = package
+            .prefix
+            .to_str()
+            .expect("path should convert to string")
+            .to_string();
+
+        self.packages.push(package);
+        let package_id = self.packages.len() - 1;
+
+        self.packages_by_name.insert(name.clone(), package_id);
+        self.packages_by_path.insert(path, package_id);
+
+        println!("Indexed package {} under ID #{}", name, package_id);
+    }
 }
 
 struct Drake {
     index: Index,
-    pool: Vec<Worker>,
 }
 
 impl Drake {
     fn new() -> Self {
         Self {
-            index: Index {
-                packages: vec![],
-                packages_by_name: HashMap::new(),
-                packages_by_path: GenericPatriciaMap::new(),
-            },
-            pool: vec![],
+            index: Index::new(),
         }
     }
 
-    pub fn scan(&self, path: &str) -> anyhow::Result<()> {
+    pub fn scan(&mut self, path: &str) -> anyhow::Result<()> {
         let mut builder = TypesBuilder::new();
         builder
             .add_defaults()
@@ -76,8 +98,7 @@ impl Drake {
                 if let Ok(dent) = result {
                     if let Some(ftype) = dent.file_type() {
                         if !ftype.is_dir() {
-                            let path = dent.path().to_owned();
-                            let task = Task::PackageName(path.clone(), result_tx.clone());
+                            let task = Task::PackageName(dent.path().to_owned(), result_tx.clone());
 
                             task_tx.send(task).expect("couldn't send PackageName task");
                         }
@@ -97,11 +118,11 @@ impl Drake {
 
         while let Ok(result) = result_rx.recv() {
             match result {
-                TaskResult::Package(package) => {
-                    println!("Received processed package {:?}", package);
-                }
+                TaskResult::Package(package) => self.index.add_package(package),
             }
         }
+
+        println!("Done. Index: {:#?}", self.index);
 
         Ok(())
     }
@@ -151,7 +172,7 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
     let path = &args[1];
 
-    let drake = Drake::new();
+    let mut drake = Drake::new();
 
     println!("Scanning path {}", path);
     drake.scan(path)
