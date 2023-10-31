@@ -39,7 +39,5 @@ impl Index {
 
         self.packages_by_name.insert(name.clone(), package_id);
         self.packages_by_path.insert(path, package_id);
-
-        println!("Indexed package {} under ID #{}", name, package_id);
     }
 }

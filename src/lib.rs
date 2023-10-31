@@ -8,8 +8,6 @@ use ignore::{types::TypesBuilder, WalkBuilder, WalkState};
 use index::Index;
 use worker::{Task, TaskResult, Worker};
 
-const NUM_WORKERS: usize = 4;
-
 // Package definition
 #[derive(Debug)]
 pub struct Package {
@@ -63,7 +61,8 @@ impl Drake {
         drop(task_tx);
         drop(result_tx);
 
-        for _ in 1..NUM_WORKERS {
+        let n = num_cpus::get();
+        for _ in 0..n {
             self.start_worker(task_rx.clone());
         }
 
