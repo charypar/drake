@@ -1,46 +1,160 @@
-use std::{env, fs};
+use std::{collections::HashMap, env, fs, path::PathBuf, thread};
 
 use anyhow::{anyhow, bail};
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use ignore::{types::TypesBuilder, WalkBuilder, WalkState};
+use patricia_tree::GenericPatriciaMap;
 use tree_sitter::{Node, Query, QueryCursor};
 
-fn main() {
+const NUM_WORKERS: usize = 4;
+
+// Package definition
+#[derive(Debug)]
+struct Package {
+    name: String,
+    prefix: PathBuf,
+}
+
+// A task for a parser worker to perform on a file with a path
+enum Task {
+    // Read Package.swift file and find package name
+    PackageName(PathBuf, Sender<TaskResult>),
+}
+
+// A result from a parser worker
+enum TaskResult {
+    Package(Package),
+}
+
+// PackageId is an offset into the list of known packages
+type PackageId = usize;
+
+// Search index
+struct Index {
+    // Known packages. Offset is used as PackageId
+    packages: Vec<Package>,
+    // Find a package by name (e.g. for import)
+    packages_by_name: HashMap<String, PackageId>,
+    // Find a package by file path prefix
+    packages_by_path: GenericPatriciaMap<PathBuf, PackageId>,
+}
+
+struct Drake {
+    index: Index,
+    pool: Vec<Worker>,
+}
+
+impl Drake {
+    fn new() -> Self {
+        Self {
+            index: Index {
+                packages: vec![],
+                packages_by_name: HashMap::new(),
+                packages_by_path: GenericPatriciaMap::new(),
+            },
+            pool: vec![],
+        }
+    }
+
+    pub fn scan(&self, path: &str) -> anyhow::Result<()> {
+        let mut builder = TypesBuilder::new();
+        builder
+            .add_defaults()
+            .add("swiftpackage", "Package.swift")?;
+
+        let matcher = builder.select("swiftpackage").build()?;
+        let walk = WalkBuilder::new(path).types(matcher).build_parallel();
+
+        let (task_tx, task_rx) = unbounded();
+        let (result_tx, result_rx) = unbounded();
+
+        walk.run(|| {
+            let task_tx = task_tx.clone();
+            let result_tx = result_tx.clone();
+
+            Box::new(move |result| {
+                if let Ok(dent) = result {
+                    if let Some(ftype) = dent.file_type() {
+                        if !ftype.is_dir() {
+                            let path = dent.path().to_owned();
+                            let task = Task::PackageName(path.clone(), result_tx.clone());
+
+                            task_tx.send(task).expect("couldn't send PackageName task");
+                        }
+                    }
+                }
+
+                WalkState::Continue
+            })
+        });
+
+        drop(task_tx);
+        drop(result_tx);
+
+        for _ in 1..NUM_WORKERS {
+            self.start_worker(task_rx.clone());
+        }
+
+        while let Ok(result) = result_rx.recv() {
+            match result {
+                TaskResult::Package(package) => {
+                    println!("Received processed package {:?}", package);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn start_worker(&self, tasks: Receiver<Task>) {
+        thread::spawn(|| {
+            let worker = Worker::new(tasks);
+            worker.start().expect("worker should run");
+        });
+    }
+}
+
+struct Worker {
+    task_rx: Receiver<Task>,
+}
+
+impl Worker {
+    fn new(task_rx: Receiver<Task>) -> Self {
+        Self { task_rx }
+    }
+
+    fn start(&self) -> anyhow::Result<()> {
+        while let Ok(task) = self.task_rx.recv() {
+            match task {
+                Task::PackageName(path, result_tx) => {
+                    let source = fs::read_to_string(&path)?;
+                    let name = get_package_name(&source)?;
+
+                    let package = Package {
+                        name,
+                        prefix: path
+                            .parent()
+                            .ok_or_else(|| anyhow!("Package manifest has no parent directory??"))?
+                            .to_owned(),
+                    };
+
+                    result_tx.send(TaskResult::Package(package))?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
     let path = &args[1];
 
-    let mut builder = TypesBuilder::new();
-    builder
-        .add_defaults()
-        .add("swiftpackage", "Package.swift")
-        .expect("Can't add package.swift matcher");
+    let drake = Drake::new();
 
-    let matcher = builder
-        .select("swiftpackage")
-        .build()
-        .expect("can't build swift matcher");
-
-    let walk = WalkBuilder::new(path).types(matcher).build_parallel();
-
-    walk.run(|| {
-        Box::new(move |result| {
-            if let Ok(dent) = result {
-                if let Some(ftype) = dent.file_type() {
-                    if !ftype.is_dir() {
-                        let source = fs::read_to_string(dent.path()).expect("Can't read file");
-                        let name = get_package_name(&source).expect("Cant't work out package name");
-
-                        println!(
-                            "Package '{}' with path prefix: {:?}",
-                            name,
-                            dent.path().parent().unwrap()
-                        );
-                    }
-                }
-            }
-
-            WalkState::Continue
-        })
-    })
+    println!("Scanning path {}", path);
+    drake.scan(path)
 }
 
 // Matches a package name in a Package.swift file
