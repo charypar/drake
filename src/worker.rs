@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{anyhow, bail};
 use crossbeam::channel::{Receiver, Sender};
-use tree_sitter::{Node, Query, QueryCursor};
+use tree_sitter::{Node, Point, Query, QueryCursor};
 
 use crate::Package;
 
@@ -91,6 +91,92 @@ fn get_package_name(source: &str) -> anyhow::Result<String> {
 
     bail!("No matches for Package declaration")
 }
+
+// Type Declarations
+
+const DECLARATIONS_QUERY: &str = r#"
+(class_declaration
+    declaration_kind: _ @kind
+    name: (type_identifier) @name
+)
+
+(protocol_declaration
+    name: (type_identifier) @name
+)
+
+(class_declaration
+    declaration_kind: _ @kind
+    name: (user_type (type_identifier) @name)
+)
+"#;
+
+// TODO use slice into source instead?
+
+#[derive(Debug)]
+pub enum Definition {
+    Class { kind: String, name: String }, // Swift classes, enums and structs all capture as Class
+    Protocol { name: String },
+    Extension { name: String },
+}
+
+#[derive(Debug)]
+pub struct Declaration {
+    pub definition: Definition,
+    pub location: Point,
+}
+
+pub fn declarations(source: &str) -> anyhow::Result<Vec<Declaration>> {
+    let mut parser = tree_sitter::Parser::new();
+    let swift_language = tree_sitter_swift::language();
+    parser.set_language(swift_language)?;
+
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| anyhow!("Could not parse the file"))?;
+
+    // FIXME: No need to do this every time
+    let query = Query::new(swift_language, DECLARATIONS_QUERY)?;
+    let mut query_cursor = QueryCursor::new();
+
+    let mut declarations = vec![];
+
+    let kind_index = query
+        .capture_index_for_name("kind")
+        .ok_or_else(|| anyhow!("Failed parsing captures"))?;
+    let name_index = query
+        .capture_index_for_name("name")
+        .ok_or_else(|| anyhow!("Failed parsing captures"))?;
+
+    let matches = query_cursor.matches(&query, tree.root_node(), source.as_bytes());
+
+    for a_match in matches {
+        let name_node = a_match.nodes_for_capture_index(name_index).next().unwrap();
+        let kind_node = a_match.nodes_for_capture_index(kind_index).next();
+
+        let definition = match a_match.pattern_index {
+            0 => Definition::Class {
+                kind: kind_node.unwrap().kind().to_string(),
+                name: source[name_node.byte_range()].to_string(),
+            },
+            1 => Definition::Protocol {
+                name: source[name_node.byte_range()].to_string(),
+            },
+            2 => Definition::Extension {
+                name: source[name_node.byte_range()].to_string(),
+            },
+            _ => bail!("Unexpected pattern index"),
+        };
+
+        declarations.push(Declaration {
+            definition,
+            location: name_node.start_position(),
+        })
+    }
+
+    Ok(declarations)
+}
+
+// Printing
 
 pub fn to_sexp(source: &str) -> anyhow::Result<String> {
     let mut parser = tree_sitter::Parser::new();

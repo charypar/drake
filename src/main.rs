@@ -1,5 +1,3 @@
-use std::env;
-
 use clap::{Parser, Subcommand};
 
 use drake::Drake;
@@ -40,13 +38,13 @@ fn main() -> anyhow::Result<()> {
     let mut drake = Drake::new();
 
     match &cli.command {
-        Command::Scan { path } => drake.scan(&path)?,
+        Command::Scan { path } => drake.scan(path)?,
         Command::Print {
             path,
             declarations,
             references,
             full,
-        } => drake.print(&path)?,
+        } => drake.print(path, *declarations, *references, *full)?,
     }
 
     Ok(())

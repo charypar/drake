@@ -1,12 +1,14 @@
 mod index;
 mod worker;
 
-use std::{any::Any, fs, path::PathBuf, thread};
+use std::{fs, path::PathBuf, thread};
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use ignore::{types::TypesBuilder, WalkBuilder, WalkParallel, WalkState};
 use index::Index;
 use worker::{to_sexp, Task, TaskResult, Worker};
+
+use crate::worker::declarations;
 
 // Package definition
 #[derive(Debug)]
@@ -27,7 +29,7 @@ impl Drake {
         }
     }
 
-    pub fn print(&mut self, path: &str) -> anyhow::Result<()> {
+    pub fn print(&mut self, path: &str, decl: bool, refs: bool, full: bool) -> anyhow::Result<()> {
         let mut builder = TypesBuilder::new();
         builder.add_defaults();
 
@@ -44,11 +46,34 @@ impl Drake {
                 None => continue,
             }
 
-            let code = fs::read_to_string(dir_entry.path())?;
-            let s_expr = to_sexp(&code)?;
+            let path = dir_entry.path().to_string_lossy();
 
-            println!("# {}", dir_entry.path().to_string_lossy());
-            println!("{s_expr}\n")
+            let code = fs::read_to_string(dir_entry.path())?;
+
+            if decl {
+                for declaration in declarations(&code)? {
+                    let loc = declaration.location;
+
+                    match declaration.definition {
+                        worker::Definition::Class { kind, name } => {
+                            println!("{} {} in {} {}:{}", kind, name, path, loc.row, loc.column)
+                        }
+                        worker::Definition::Protocol { name } => {
+                            println!("protocol {} in {} {}:{}", name, path, loc.row, loc.column)
+                        }
+                        worker::Definition::Extension { name } => {
+                            println!("extension {} in {} {}:{}", name, path, loc.row, loc.column)
+                        }
+                    }
+                }
+            }
+
+            if full {
+                println!("## Parse tree\n");
+
+                let s_expr = to_sexp(&code)?;
+                println!("{s_expr}\n")
+            }
         }
 
         Ok(())
