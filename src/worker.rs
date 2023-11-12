@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{anyhow, bail};
 use crossbeam::channel::{Receiver, Sender};
-use tree_sitter::{Query, QueryCursor};
+use tree_sitter::{Node, Query, QueryCursor};
 
 use crate::Package;
 
@@ -50,6 +50,8 @@ impl Worker {
     }
 }
 
+// TODO wrap these so we can reuse initialisation
+
 // Matches a package name in a Package.swift file
 const PACKAGE_NAME_QUERY: &str = r#"
 (call_expression
@@ -82,9 +84,80 @@ fn get_package_name(source: &str) -> anyhow::Result<String> {
 
     for capture in first_match.captures {
         if capture.index == 2 {
+            // FIXME use (source-text) function
             return Ok(source[capture.node.byte_range()].to_string());
         }
     }
 
     bail!("No matches for Package declaration")
+}
+
+pub fn to_sexp(source: &str) -> anyhow::Result<String> {
+    let mut parser = tree_sitter::Parser::new();
+    let swift_language = tree_sitter_swift::language();
+    parser.set_language(swift_language)?;
+
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| anyhow!("Couldn't parse as swift file"))?;
+
+    print_node(tree.root_node(), source)
+}
+
+fn print_node(node: Node, source: &str) -> anyhow::Result<String> {
+    let mut depth = 0;
+    let mut cursor = node.walk();
+
+    let mut output = String::new();
+    let empty_string = "".to_string();
+
+    loop {
+        let node = cursor.node();
+
+        let field_name = cursor.field_name().map(|name| format!("{}: ", name));
+
+        output.push_str(&prefix(depth));
+        if let Some(name) = field_name {
+            output.push_str(&name);
+        }
+        output.push_str(&format!("({}", node.kind()));
+
+        if node.child_count() < 1 && node.is_named() {
+            output.push_str(&format!(" '{}'", &source[node.byte_range()],));
+        }
+
+        if cursor.goto_first_child() {
+            output.push_str(&format!("\n"));
+            depth += 1;
+            continue;
+        }
+
+        if cursor.goto_next_sibling() {
+            output.push_str(&format!(")\n"));
+
+            continue;
+        }
+
+        // can't go any deeper or further, go up
+
+        loop {
+            if !cursor.goto_parent() {
+                // back at root
+                return Ok(output);
+            }
+
+            output.push_str(&format!(")"));
+            depth -= 1;
+
+            if cursor.goto_next_sibling() {
+                // There's another sibling to visit
+                output.push_str(&format!("\n"));
+                break;
+            }
+        }
+    }
+}
+
+fn prefix(depth: usize) -> String {
+    "  ".repeat(depth).to_string()
 }

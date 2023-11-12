@@ -1,12 +1,12 @@
 mod index;
 mod worker;
 
-use std::{path::PathBuf, thread};
+use std::{any::Any, fs, path::PathBuf, thread};
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use ignore::{types::TypesBuilder, WalkBuilder, WalkParallel, WalkState};
 use index::Index;
-use worker::{Task, TaskResult, Worker};
+use worker::{to_sexp, Task, TaskResult, Worker};
 
 // Package definition
 #[derive(Debug)]
@@ -25,6 +25,33 @@ impl Drake {
         Self {
             index: Index::new(),
         }
+    }
+
+    pub fn print(&mut self, path: &str) -> anyhow::Result<()> {
+        let mut builder = TypesBuilder::new();
+        builder.add_defaults();
+
+        let matcher = builder.select("swift").build()?;
+        let mut walk = WalkBuilder::new(path).types(matcher).build();
+
+        while let Some(Ok(dir_entry)) = walk.next() {
+            match dir_entry.file_type() {
+                Some(ft) => {
+                    if ft.is_dir() {
+                        continue;
+                    }
+                }
+                None => continue,
+            }
+
+            let code = fs::read_to_string(dir_entry.path())?;
+            let s_expr = to_sexp(&code)?;
+
+            println!("# {}", dir_entry.path().to_string_lossy());
+            println!("{s_expr}\n")
+        }
+
+        Ok(())
     }
 
     pub fn scan(&mut self, path: &str) -> anyhow::Result<()> {
