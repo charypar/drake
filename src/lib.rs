@@ -29,7 +29,7 @@ impl Drake {
         }
     }
 
-    pub fn print(&mut self, path: &str, decl: bool, refs: bool, full: bool) -> anyhow::Result<()> {
+    pub fn print(&mut self, path: &str, decl: bool, _refs: bool, full: bool) -> anyhow::Result<()> {
         let mut builder = TypesBuilder::new();
         builder.add_defaults();
 

@@ -195,7 +195,6 @@ fn print_node(node: Node, source: &str) -> anyhow::Result<String> {
     let mut cursor = node.walk();
 
     let mut output = String::new();
-    let empty_string = "".to_string();
 
     loop {
         let node = cursor.node();
@@ -213,13 +212,13 @@ fn print_node(node: Node, source: &str) -> anyhow::Result<String> {
         }
 
         if cursor.goto_first_child() {
-            output.push_str(&format!("\n"));
+            output.push('\n');
             depth += 1;
             continue;
         }
 
         if cursor.goto_next_sibling() {
-            output.push_str(&format!(")\n"));
+            output.push_str(")\n");
 
             continue;
         }
@@ -232,12 +231,12 @@ fn print_node(node: Node, source: &str) -> anyhow::Result<String> {
                 return Ok(output);
             }
 
-            output.push_str(&format!(")"));
+            output.push(')');
             depth -= 1;
 
             if cursor.goto_next_sibling() {
                 // There's another sibling to visit
-                output.push_str(&format!("\n"));
+                output.push('\n');
                 break;
             }
         }
