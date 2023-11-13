@@ -110,7 +110,7 @@ const DECLARATIONS_QUERY: &str = r#"
 )
 "#;
 
-// TODO use slice into source instead?
+// TODO use &str into the source instead to avoid hundreds of tiny allocations
 
 #[derive(Debug)]
 pub enum Definition {
@@ -174,6 +174,55 @@ pub fn declarations(source: &str) -> anyhow::Result<Vec<Declaration>> {
     }
 
     Ok(declarations)
+}
+
+// Type References
+
+const REFERENCES_QUERY: &str = r#"
+((type_identifier) @name (#match? @name "^[A-Z]")) @name
+
+((simple_identifier) @name (#match? @name "^[A-Z]")) @name
+"#;
+
+// TODO use &str into the source instead to avoid hundreds of tiny allocations
+
+#[derive(Debug)]
+pub struct Reference {
+    pub name: String,
+    pub location: Point,
+}
+
+pub fn references(source: &str) -> anyhow::Result<Vec<Reference>> {
+    let mut parser = tree_sitter::Parser::new();
+    let swift_language = tree_sitter_swift::language();
+    parser.set_language(swift_language)?;
+
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| anyhow!("Could not parse the file"))?;
+
+    // FIXME: No need to do this every time
+    let query = Query::new(swift_language, REFERENCES_QUERY)?;
+    let mut query_cursor = QueryCursor::new();
+
+    let mut references = vec![];
+
+    let name_index = query
+        .capture_index_for_name("name")
+        .ok_or_else(|| anyhow!("Failed parsing captures"))?;
+
+    let matches = query_cursor.matches(&query, tree.root_node(), source.as_bytes());
+
+    for a_match in matches {
+        let name_node = a_match.nodes_for_capture_index(name_index).next().unwrap();
+
+        references.push(Reference {
+            name: source[name_node.byte_range()].to_string(),
+            location: name_node.start_position(),
+        })
+    }
+
+    Ok(references)
 }
 
 // Printing

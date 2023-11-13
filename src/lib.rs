@@ -6,9 +6,7 @@ use std::{fs, path::PathBuf, thread};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use ignore::{types::TypesBuilder, WalkBuilder, WalkParallel, WalkState};
 use index::Index;
-use worker::{to_sexp, Task, TaskResult, Worker};
-
-use crate::worker::declarations;
+use worker::{declarations, references, to_sexp, Task, TaskResult, Worker};
 
 // Package definition
 #[derive(Debug)]
@@ -29,7 +27,7 @@ impl Drake {
         }
     }
 
-    pub fn print(&mut self, path: &str, decl: bool, _refs: bool, full: bool) -> anyhow::Result<()> {
+    pub fn print(&mut self, path: &str, decl: bool, refs: bool, full: bool) -> anyhow::Result<()> {
         let mut builder = TypesBuilder::new();
         builder.add_defaults();
 
@@ -51,6 +49,8 @@ impl Drake {
             let code = fs::read_to_string(dir_entry.path())?;
 
             if decl {
+                println!("# Declarations");
+
                 for declaration in declarations(&code)? {
                     let loc = declaration.location;
 
@@ -65,6 +65,17 @@ impl Drake {
                             println!("extension {} in {} {}:{}", name, path, loc.row, loc.column)
                         }
                     }
+                }
+            }
+
+            if refs {
+                println!("# References");
+
+                for reference in references(&code)? {
+                    let loc = reference.location;
+                    let name = reference.name;
+
+                    println!("{} in {} {}:{}", name, path, loc.row, loc.column)
                 }
             }
 
