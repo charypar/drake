@@ -3,8 +3,7 @@ mod tree;
 use anyhow::anyhow;
 use tree_sitter::{Language, Query};
 
-use tree::Tree;
-pub use tree::{Declaration, Definition, Reference};
+pub use tree::{Declaration, Definition, Reference, Tree};
 
 // Matches a package name in a Package.swift file
 const PACKAGE_NAME_QUERY: &str = include_str!("package_name.scm");
