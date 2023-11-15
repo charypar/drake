@@ -1,4 +1,5 @@
 mod index;
+mod parser;
 mod worker;
 
 use std::{fs, path::PathBuf, thread};
@@ -6,7 +7,8 @@ use std::{fs, path::PathBuf, thread};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use ignore::{types::TypesBuilder, WalkBuilder, WalkParallel, WalkState};
 use index::Index;
-use worker::{declarations, references, to_sexp, Task, TaskResult, Worker};
+use parser::{to_sexp, Parser};
+use worker::{Task, TaskResult, Worker};
 
 // Package definition
 #[derive(Debug)]
@@ -34,6 +36,8 @@ impl Drake {
         let matcher = builder.select("swift").build()?;
         let mut walk = WalkBuilder::new(path).types(matcher).build();
 
+        let parser = Parser::new();
+
         while let Some(Ok(dir_entry)) = walk.next() {
             match dir_entry.file_type() {
                 Some(ft) => {
@@ -51,17 +55,17 @@ impl Drake {
             if decl {
                 println!("# Declarations");
 
-                for declaration in declarations(&code)? {
+                for declaration in parser.declarations(&code)? {
                     let loc = declaration.location;
 
                     match declaration.definition {
-                        worker::Definition::Class { kind, name } => {
+                        parser::Definition::Class { kind, name } => {
                             println!("{} {} in {} {}:{}", kind, name, path, loc.row, loc.column)
                         }
-                        worker::Definition::Protocol { name } => {
+                        parser::Definition::Protocol { name } => {
                             println!("protocol {} in {} {}:{}", name, path, loc.row, loc.column)
                         }
-                        worker::Definition::Extension { name } => {
+                        parser::Definition::Extension { name } => {
                             println!("extension {} in {} {}:{}", name, path, loc.row, loc.column)
                         }
                     }
@@ -71,7 +75,7 @@ impl Drake {
             if refs {
                 println!("# References");
 
-                for reference in references(&code)? {
+                for reference in parser.references(&code)? {
                     let loc = reference.location;
                     let name = reference.name;
 
