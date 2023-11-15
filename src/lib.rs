@@ -73,11 +73,16 @@ impl Drake {
             self.start_worker(task_rx.clone());
         }
 
+        let mut count = 0;
+
         while let Ok(result) = result_rx.recv() {
             if let TaskResult::PrintOutput(out) = result {
+                count += 1;
                 println!("{out}");
             }
         }
+
+        println!("Done. Processed {count} files.");
 
         Ok(())
     }
