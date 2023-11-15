@@ -7,7 +7,7 @@ use std::{fs, path::PathBuf, thread};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use ignore::{types::TypesBuilder, WalkBuilder, WalkParallel, WalkState};
 use index::Index;
-use parser::{to_sexp, Parser};
+use parser::Parser;
 use worker::{Task, TaskResult, Worker};
 
 // Package definition
@@ -20,12 +20,14 @@ pub struct Package {
 #[derive(Default)]
 pub struct Drake {
     index: Index,
+    parser: Parser,
 }
 
 impl Drake {
     pub fn new() -> Self {
         Self {
             index: Index::new(),
+            parser: Parser::new(),
         }
     }
 
@@ -35,8 +37,6 @@ impl Drake {
 
         let matcher = builder.select("swift").build()?;
         let mut walk = WalkBuilder::new(path).types(matcher).build();
-
-        let parser = Parser::new();
 
         while let Some(Ok(dir_entry)) = walk.next() {
             match dir_entry.file_type() {
@@ -51,11 +51,12 @@ impl Drake {
             let path = dir_entry.path().to_string_lossy();
 
             let code = fs::read_to_string(dir_entry.path())?;
+            let tree = self.parser.parse(&code)?;
 
             if decl {
                 println!("# Declarations");
 
-                for declaration in parser.declarations(&code)? {
+                for declaration in tree.declarations(&code)? {
                     let loc = declaration.location;
 
                     match declaration.definition {
@@ -75,7 +76,7 @@ impl Drake {
             if refs {
                 println!("# References");
 
-                for reference in parser.references(&code)? {
+                for reference in tree.references(&code)? {
                     let loc = reference.location;
                     let name = reference.name;
 
@@ -86,8 +87,7 @@ impl Drake {
             if full {
                 println!("## Parse tree\n");
 
-                let s_expr = to_sexp(&code)?;
-                println!("{s_expr}\n")
+                println!("{}\n", tree);
             }
         }
 

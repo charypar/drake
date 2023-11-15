@@ -34,7 +34,8 @@ impl Worker {
             match task {
                 Task::PackageName(path, result_tx) => {
                     let source = fs::read_to_string(&path)?;
-                    let name = self.parser.package_name(&source)?;
+                    let tree = self.parser.parse(&source)?;
+                    let name = tree.package_name()?;
 
                     let package = Package {
                         name: name.to_string(),
