@@ -1,13 +1,14 @@
 mod index;
 mod parser;
-mod worker;
+mod worker_pool;
 
-use std::{path::PathBuf, thread};
+use std::{fs, path::PathBuf};
 
-use crossbeam::channel::{unbounded, Receiver};
-use ignore::{types::TypesBuilder, WalkBuilder, WalkState};
+use anyhow::anyhow;
+
+use ignore::{types::TypesBuilder, WalkBuilder};
 use index::Index;
-use worker::{Task, TaskResult, Worker};
+use parser::{Definition, Tree};
 
 // Package definition
 #[derive(Debug)]
@@ -28,8 +29,6 @@ impl Drake {
         }
     }
 
-    // TODO extract the common threadpool stuff
-
     pub fn print(&mut self, path: &str, decl: bool, refs: bool, full: bool) -> anyhow::Result<()> {
         let mut builder = TypesBuilder::new();
         builder.add_defaults();
@@ -37,48 +36,21 @@ impl Drake {
         let matcher = builder.select("swift").build()?;
         let walk = WalkBuilder::new(path).types(matcher).build_parallel();
 
-        let (task_tx, task_rx) = unbounded();
-        let (result_tx, result_rx) = unbounded();
+        let results = worker_pool::process_files(walk, move |path, parser| {
+            let source = fs::read_to_string(path)?;
+            let tree = parser.parse(&source)?;
 
-        walk.run(|| {
-            let task_tx = task_tx.clone();
-            let result_tx = result_tx.clone();
-
-            Box::new(move |result| {
-                if let Ok(dent) = result {
-                    if let Some(ftype) = dent.file_type() {
-                        if !ftype.is_dir() {
-                            let task = Task::Print {
-                                path: dent.path().to_owned(),
-                                result_tx: result_tx.clone(),
-                                declarations: decl,
-                                references: refs,
-                                full,
-                            };
-
-                            task_tx.send(task).expect("couldn't send Print task");
-                        }
-                    }
-                }
-
-                WalkState::Continue
-            })
+            print(&path.to_string_lossy(), tree, &source, decl, refs, full)
         });
-
-        drop(task_tx);
-        drop(result_tx);
-
-        let n = num_cpus::get();
-        for _ in 0..n {
-            self.start_worker(task_rx.clone());
-        }
 
         let mut count = 0;
 
-        while let Ok(result) = result_rx.recv() {
-            if let TaskResult::PrintOutput(out) = result {
-                count += 1;
-                println!("{out}");
+        for file in results {
+            count += 1;
+
+            match file {
+                Ok(out) => println!("{out}"),
+                Err(e) => eprintln!("Could not process file: {e}"),
             }
         }
 
@@ -87,7 +59,7 @@ impl Drake {
         Ok(())
     }
 
-    pub fn scan(&mut self, path: &str) -> anyhow::Result<()> {
+    pub fn package_name(&mut self, path: &str) -> anyhow::Result<()> {
         let mut builder = TypesBuilder::new();
         builder
             .add_defaults()
@@ -96,39 +68,24 @@ impl Drake {
         let matcher = builder.select("swiftpackage").build()?;
         let walk = WalkBuilder::new(path).types(matcher).build_parallel();
 
-        let (task_tx, task_rx) = unbounded();
-        let (result_tx, result_rx) = unbounded();
+        let packages = worker_pool::process_files(walk, move |path, parser| {
+            let source = fs::read_to_string(path)?;
+            let tree = parser.parse(&source)?;
+            let name = tree.package_name()?;
 
-        walk.run(|| {
-            let task_tx = task_tx.clone();
-            let result_tx = result_tx.clone();
-
-            Box::new(move |result| {
-                if let Ok(dent) = result {
-                    if let Some(ftype) = dent.file_type() {
-                        if !ftype.is_dir() {
-                            let task = Task::PackageName(dent.path().to_owned(), result_tx.clone());
-
-                            task_tx.send(task).expect("couldn't send PackageName task");
-                        }
-                    }
-                }
-
-                WalkState::Continue
+            Ok(Package {
+                name: name.to_string(),
+                prefix: path
+                    .parent()
+                    .ok_or_else(|| anyhow!("Package manifest has no parent directory??"))?
+                    .to_owned(),
             })
         });
 
-        drop(task_tx);
-        drop(result_tx);
-
-        let n = num_cpus::get();
-        for _ in 0..n {
-            self.start_worker(task_rx.clone());
-        }
-
-        while let Ok(result) = result_rx.recv() {
-            if let TaskResult::Package(package) = result {
-                self.index.add_package(package);
+        for package in packages {
+            match package {
+                Ok(package) => self.index.add_package(package),
+                Err(e) => eprintln!("Could not process file: {e}"),
             }
         }
 
@@ -136,11 +93,65 @@ impl Drake {
 
         Ok(())
     }
+}
 
-    fn start_worker(&self, tasks: Receiver<Task>) {
-        thread::spawn(|| {
-            let worker = Worker::new(tasks);
-            worker.start().expect("worker should run");
-        });
+// TODO improve this
+fn print(
+    path: &str,
+    tree: Tree,
+    code: &str,
+    decl: bool,
+    refs: bool,
+    full: bool,
+) -> anyhow::Result<String> {
+    let mut out = String::new();
+
+    out.push_str(&format!("# File {}\n", path));
+
+    if decl {
+        out.push_str("\n## Declarations\n\n");
+
+        for declaration in tree.declarations(code)? {
+            let loc = declaration.location;
+
+            match declaration.definition {
+                Definition::Class { kind, name } => {
+                    out.push_str(&format!(
+                        "{} {} at {}:{}\n",
+                        kind, name, loc.row, loc.column
+                    ));
+                }
+                Definition::Protocol { name } => {
+                    out.push_str(&format!(
+                        "protocol {} at {}:{}\n",
+                        name, loc.row, loc.column
+                    ));
+                }
+                Definition::Extension { name } => {
+                    out.push_str(&format!(
+                        "extension {} at {}:{}\n",
+                        name, loc.row, loc.column
+                    ));
+                }
+            }
+        }
     }
+
+    if refs {
+        out.push_str("\n## References\n\n");
+
+        for reference in tree.references(code)? {
+            let loc = reference.location;
+            let name = reference.name;
+
+            out.push_str(&format!("{} at {}:{}\n", name, loc.row, loc.column));
+        }
+    }
+
+    if full {
+        out.push_str("\n## Parse tree\n\n");
+        out.push_str(&format!("{}\n", tree));
+    }
+
+    Ok(out)
 }

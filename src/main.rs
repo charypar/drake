@@ -38,7 +38,7 @@ fn main() -> anyhow::Result<()> {
     let mut drake = Drake::new();
 
     match &cli.command {
-        Command::Scan { path } => drake.scan(path)?,
+        Command::Scan { path } => drake.package_name(path)?,
         Command::Print {
             path,
             declarations,

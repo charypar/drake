@@ -29,9 +29,9 @@ impl Parser {
             package_name: Query::new(language, PACKAGE_NAME_QUERY)
                 .expect("Failed to parse package name query"),
             declaration: Query::new(language, DECLARATIONS_QUERY)
-                .expect("Failed to parse package name query"),
+                .expect("Failed to parse declarations query"),
             reference: Query::new(language, REFERENCES_QUERY)
-                .expect("Failed to parse package name query"),
+                .expect("Failed to parse references query"),
         };
 
         Self { language, queries }
