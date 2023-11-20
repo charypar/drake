@@ -1,6 +1,11 @@
 [package]
 name = "drake"
 version = "0.1.0"
+description = "A tree-sitter based codebase dependency explorer"
+repository = "https://github.com/charypar/drake"
+documentation = "https://docs.rs/drake"
+readme = "README.md"
+license = "MIT"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
