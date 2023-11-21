@@ -37,12 +37,12 @@ impl Parser {
         Self { language, queries }
     }
 
-    pub fn parse<'a, 'p>(&'p self, source: &'a str) -> anyhow::Result<Tree<'a, 'p>> {
+    pub fn parse(&self, source: String) -> anyhow::Result<Tree<'_>> {
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(self.language)?;
 
         let tree = parser
-            .parse(source, None)
+            .parse(&source, None)
             .ok_or_else(|| anyhow!("Could not parse Swift source"))?;
 
         Ok(Tree {

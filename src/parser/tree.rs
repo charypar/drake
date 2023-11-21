@@ -1,36 +1,37 @@
 use std::fmt::{Display, Write};
 
 use anyhow::{anyhow, bail};
-use tree_sitter::{Point, QueryCursor};
+use tree_sitter::{Node, Point, QueryCursor};
 
 use super::Parser;
 
-pub struct Tree<'a, 'parser> {
+pub struct Tree<'parser> {
     pub parser: &'parser Parser,
-    pub source: &'a str,
+    pub source: String,
     pub tree: tree_sitter::Tree,
 }
 
 #[derive(Debug)]
-pub enum Definition<'a> {
-    Class { kind: &'static str, name: &'a str }, // Swift classes, enums and structs all capture as Class
-    Protocol { name: &'a str },
-    Extension { name: &'a str },
+pub enum Definition {
+    Class { kind: &'static str, name: String }, // Swift classes, enums and structs all capture as Class
+    Protocol { name: String },
+    Extension { name: String },
 }
 
 #[derive(Debug)]
-pub struct Declaration<'a> {
-    pub definition: Definition<'a>,
+pub struct Declaration {
+    pub definition: Definition,
     pub location: Point,
+    pub references: Vec<Reference>,
 }
 
 #[derive(Debug)]
-pub struct Reference<'a> {
-    pub name: &'a str,
+pub struct Reference {
+    pub name: String,
     pub location: Point,
 }
 
-impl Tree<'_, '_> {
+impl Tree<'_> {
     pub fn package_name(&self) -> anyhow::Result<&str> {
         let query = &self.parser.queries.package_name;
         let mut query_cursor = QueryCursor::new();
@@ -49,7 +50,7 @@ impl Tree<'_, '_> {
         bail!("No matches for Package declaration")
     }
 
-    pub fn declarations<'a>(&self, source: &'a str) -> anyhow::Result<Vec<Declaration<'a>>> {
+    pub fn declarations(&self) -> anyhow::Result<Vec<Declaration>> {
         let query = &self.parser.queries.declaration;
         let mut query_cursor = QueryCursor::new();
 
@@ -61,23 +62,30 @@ impl Tree<'_, '_> {
         let name_index = query
             .capture_index_for_name("name")
             .ok_or_else(|| anyhow!("Failed parsing captures"))?;
+        let declaration_index = query
+            .capture_index_for_name("declaration")
+            .ok_or_else(|| anyhow!("Failed parsing captures"))?;
 
-        let matches = query_cursor.matches(query, self.tree.root_node(), source.as_bytes());
+        let matches = query_cursor.matches(query, self.tree.root_node(), self.source.as_bytes());
 
         for a_match in matches {
             let name_node = a_match.nodes_for_capture_index(name_index).next().unwrap();
             let kind_node = a_match.nodes_for_capture_index(kind_index).next();
+            let match_node = a_match
+                .nodes_for_capture_index(declaration_index)
+                .next()
+                .unwrap();
 
             let definition = match a_match.pattern_index {
                 0 => Definition::Class {
                     kind: kind_node.unwrap().kind(),
-                    name: &source[name_node.byte_range()],
+                    name: self.source[name_node.byte_range()].to_string(),
                 },
                 1 => Definition::Protocol {
-                    name: &source[name_node.byte_range()],
+                    name: self.source[name_node.byte_range()].to_string(),
                 },
                 2 => Definition::Extension {
-                    name: &source[name_node.byte_range()],
+                    name: self.source[name_node.byte_range()].to_string(),
                 },
                 _ => bail!("Unexpected pattern index"),
             };
@@ -85,13 +93,18 @@ impl Tree<'_, '_> {
             declarations.push(Declaration {
                 definition,
                 location: name_node.start_position(),
+                references: self.references_in(match_node, &self.source)?,
             })
         }
 
         Ok(declarations)
     }
 
-    pub fn references<'a>(&self, source: &'a str) -> anyhow::Result<Vec<Reference<'a>>> {
+    pub fn references<'a>(&self, source: &'a str) -> anyhow::Result<Vec<Reference>> {
+        self.references_in(self.tree.root_node(), source)
+    }
+
+    fn references_in<'a>(&self, node: Node, source: &'a str) -> anyhow::Result<Vec<Reference>> {
         let query = &self.parser.queries.reference;
 
         let mut query_cursor = QueryCursor::new();
@@ -102,13 +115,13 @@ impl Tree<'_, '_> {
             .capture_index_for_name("name")
             .ok_or_else(|| anyhow!("Failed parsing captures"))?;
 
-        let matches = query_cursor.matches(query, self.tree.root_node(), source.as_bytes());
+        let matches = query_cursor.matches(query, node, source.as_bytes());
 
         for a_match in matches {
             let name_node = a_match.nodes_for_capture_index(name_index).next().unwrap();
 
             references.push(Reference {
-                name: &source[name_node.byte_range()],
+                name: source[name_node.byte_range()].to_string(),
                 location: name_node.start_position(),
             })
         }
@@ -123,7 +136,7 @@ impl Default for Parser {
     }
 }
 
-impl Display for Tree<'_, '_> {
+impl Display for Tree<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         fn prefix(depth: usize) -> String {
             "  ".repeat(depth).to_string()

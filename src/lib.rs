@@ -10,6 +10,8 @@ use ignore::{types::TypesBuilder, WalkBuilder};
 use index::Index;
 use parser::{Definition, Tree};
 
+use crate::index::Kind;
+
 // Package definition
 #[derive(Debug)]
 pub struct Package {
@@ -38,9 +40,9 @@ impl Drake {
 
         let results = worker_pool::process_files(walk, move |path, parser| {
             let source = fs::read_to_string(path)?;
-            let tree = parser.parse(&source)?;
+            let tree = parser.parse(source)?;
 
-            print(&path.to_string_lossy(), tree, &source, decl, refs, full)
+            print(&path.to_string_lossy(), tree, decl, refs, full)
         });
 
         let mut count = 0;
@@ -70,7 +72,7 @@ impl Drake {
 
         let packages = worker_pool::process_files(walk, move |path, parser| {
             let source = fs::read_to_string(path)?;
-            let tree = parser.parse(&source)?;
+            let tree = parser.parse(source)?;
             let name = tree.package_name()?;
 
             Ok(Package {
@@ -84,7 +86,9 @@ impl Drake {
 
         for package in packages {
             match package {
-                Ok(package) => self.index.add_package(package),
+                Ok(package) => self
+                    .index
+                    .add_package(&package.name, &package.prefix.to_string_lossy()),
                 Err(e) => eprintln!("Could not process file: {e}"),
             }
         }
@@ -93,58 +97,115 @@ impl Drake {
 
         Ok(())
     }
+
+    pub fn types(&mut self, path: &str) -> anyhow::Result<()> {
+        let mut builder = TypesBuilder::new();
+        builder.add_defaults();
+
+        let matcher = builder.select("swift").build()?;
+        let walk = WalkBuilder::new(path).types(matcher).build_parallel();
+
+        let results = worker_pool::process_files(walk, move |path, parser| {
+            let source = fs::read_to_string(path)?;
+            let tree = parser.parse(source)?;
+
+            Ok((path.to_string_lossy().to_string(), tree.declarations()?))
+        });
+
+        let mut declaration_count = 0;
+        let mut references_count = 0;
+
+        for result in results {
+            match result {
+                Ok((file_path, declarations)) => {
+                    for declaration in declarations {
+                        declaration_count += 1;
+
+                        let (name, kind) = match declaration.definition {
+                            Definition::Class { kind, name } => match kind {
+                                "class" => (name, Kind::Class),
+                                "struct" => (name, Kind::Struct),
+                                "enum" => (name, Kind::Enum),
+                                x => {
+                                    eprintln!("Unknown type kind {x}");
+                                    unreachable!();
+                                }
+                            },
+                            Definition::Protocol { name } => (name, Kind::Protocol),
+                            Definition::Extension { name } => (name, Kind::Extension),
+                        };
+                        let point = declaration.location;
+                        let references: Vec<_> = declaration
+                            .references
+                            .iter()
+                            .map(|r| {
+                                references_count += 1;
+
+                                (r.name.as_str(), &r.location)
+                            })
+                            .collect();
+
+                        self.index
+                            .add_declaration(&name, kind, &file_path, point, &references);
+                    }
+                }
+                Err(e) => eprintln!("Could not process file: {e}"),
+            }
+        }
+
+        println!("Index: {:#?}", self.index);
+
+        println!(
+            "Done. Processed {declaration_count} declarations and {references_count} references."
+        );
+
+        Ok(())
+    }
 }
 
 // TODO improve this
-fn print(
-    path: &str,
-    tree: Tree,
-    code: &str,
-    decl: bool,
-    refs: bool,
-    full: bool,
-) -> anyhow::Result<String> {
+fn print(path: &str, tree: Tree, decl: bool, refs: bool, full: bool) -> anyhow::Result<String> {
     let mut out = String::new();
 
     out.push_str(&format!("# File {}\n", path));
 
     if decl {
-        out.push_str("\n## Declarations\n\n");
-
-        for declaration in tree.declarations(code)? {
+        for declaration in tree.declarations()? {
             let loc = declaration.location;
 
             match declaration.definition {
                 Definition::Class { kind, name } => {
                     out.push_str(&format!(
-                        "{} {} at {}:{}\n",
+                        "\n{} {} at {}:{}\n",
                         kind, name, loc.row, loc.column
                     ));
                 }
                 Definition::Protocol { name } => {
                     out.push_str(&format!(
-                        "protocol {} at {}:{}\n",
+                        "\nprotocol {} at {}:{}\n",
                         name, loc.row, loc.column
                     ));
                 }
                 Definition::Extension { name } => {
                     out.push_str(&format!(
-                        "extension {} at {}:{}\n",
+                        "\nextension {} at {}:{}\n",
                         name, loc.row, loc.column
                     ));
                 }
             }
-        }
-    }
 
-    if refs {
-        out.push_str("\n## References\n\n");
+            if !refs {
+                continue;
+            }
 
-        for reference in tree.references(code)? {
-            let loc = reference.location;
-            let name = reference.name;
+            for reference in declaration.references {
+                let loc = reference.location;
 
-            out.push_str(&format!("{} at {}:{}\n", name, loc.row, loc.column));
+                out.push_str(&format!(
+                    "- {} at {}:{}\n",
+                    reference.name, loc.row, loc.column
+                ));
+            }
         }
     }
 
