@@ -100,11 +100,11 @@ impl Tree<'_> {
         Ok(declarations)
     }
 
-    pub fn references<'a>(&self, source: &'a str) -> anyhow::Result<Vec<Reference>> {
+    pub fn references(&self, source: &str) -> anyhow::Result<Vec<Reference>> {
         self.references_in(self.tree.root_node(), source)
     }
 
-    fn references_in<'a>(&self, node: Node, source: &'a str) -> anyhow::Result<Vec<Reference>> {
+    fn references_in(&self, node: Node, source: &str) -> anyhow::Result<Vec<Reference>> {
         let query = &self.parser.queries.reference;
 
         let mut query_cursor = QueryCursor::new();

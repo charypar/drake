@@ -10,7 +10,7 @@ use ignore::{types::TypesBuilder, WalkBuilder};
 use index::Index;
 use parser::{Definition, Tree};
 
-use crate::index::{Declaration, Kind};
+use crate::index::{Kind, Type, TypeId};
 
 // Package definition
 #[derive(Debug)]
@@ -74,18 +74,26 @@ impl Drake {
             .ok_or_else(|| anyhow!("Could not find type #{} in the index", root_id))?;
 
         // Print the headline
-        println!(
-            "Type {}{}",
-            type_record.name,
-            if type_record.declarations.is_empty() {
-                ": (unknown)"
-            } else {
-                ":"
-            }
-        );
+        println!("\nType {}:", type_record.name,);
+
+        if type_record.declarations.is_empty() {
+            println!(
+                "Type {} is defined outside of the specified path.",
+                type_record.name
+            );
+            return Ok(());
+        }
+
+        self.print_dependency(type_record, &[root_id], 0)?;
+
+        Ok(())
+    }
+
+    fn print_dependency(&self, a_type: &Type, skip: &[TypeId], depth: usize) -> anyhow::Result<()> {
+        let prefix = "  ".repeat(depth);
 
         // Print declarations
-        for declaration in &type_record.declarations {
+        for declaration in &a_type.declarations {
             let path = self
                 .index
                 .file_path(declaration)
@@ -98,19 +106,19 @@ impl Drake {
             };
 
             println!(
-                "- {} in {} {}:{} depends on:",
-                kind, path, declaration.point.row, declaration.point.column
+                "{}- {} in {} {}:{}, using types:",
+                prefix, kind, path, declaration.point.row, declaration.point.column
             );
 
             for (type_id, points) in declaration.dependencies() {
-                if type_id == root_id {
+                if skip.contains(&type_id) {
                     continue;
                 }
 
-                let type_record = self
+                let ref_type = self
                     .index
                     .get_type(type_id)
-                    .ok_or_else(|| anyhow!("Could not find type #{} in the index", root_id))?;
+                    .ok_or_else(|| anyhow!("Could not find type #{} in the index", type_id))?;
 
                 let points_str = points
                     .iter()
@@ -120,15 +128,23 @@ impl Drake {
 
                 // Print the headline
                 println!(
-                    "  - {} (at {}){}",
-                    type_record.name,
+                    "{}  {} (at {}){}",
+                    prefix,
+                    ref_type.name,
                     points_str,
-                    if type_record.declarations.is_empty() {
-                        ": (unknown)"
+                    if ref_type.declarations.is_empty() {
+                        ": (external)"
                     } else {
                         ":"
                     }
                 );
+
+                if !ref_type.declarations.is_empty() {
+                    let mut ref_skip = skip.to_vec();
+                    ref_skip.push(type_id);
+
+                    self.print_dependency(ref_type, &ref_skip, depth + 1)?;
+                }
             }
         }
 
