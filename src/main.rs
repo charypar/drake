@@ -11,14 +11,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Scan a path and index packages
-    Packages {
-        /// Path to scan
-        #[arg(default_value = ".")]
-        path: String,
-    },
     /// Scan a path and index declarations and references
-    Types {
+    Deps {
+        /// Type name to start from
+        type_name: String,
         /// Path to scan
         #[arg(default_value = ".")]
         path: String,
@@ -43,8 +39,10 @@ fn main() -> anyhow::Result<()> {
     let mut drake = Drake::new();
 
     match &cli.command {
-        Command::Packages { path } => drake.package_name(path)?,
-        Command::Types { path } => drake.types(path)?,
+        Command::Deps { path, type_name } => {
+            drake.scan(path)?;
+            drake.print_dependencies(type_name)?;
+        }
         Command::Print {
             path,
             declarations,

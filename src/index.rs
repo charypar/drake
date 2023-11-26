@@ -13,7 +13,7 @@ pub type TypeId = usize;
 #[derive(Debug)]
 pub struct Type {
     pub name: String,
-    pub declaration: Option<Declaration>,
+    pub declarations: Vec<Declaration>, // A type may be extended in multiple places
 }
 
 #[derive(Debug)]
@@ -40,21 +40,19 @@ pub struct Declaration {
     pub point: Point,
     // File in which the declaration is
     file: FileId,
-    // Types the declaration uses and their locations
+    // Types the declaration uses and locations of the references
     dependencies: Vec<(TypeId, Point)>,
 }
 
 impl Declaration {
-    fn file_path(&self) -> String {
-        todo!()
-    }
+    pub fn dependencies(&self) -> HashMap<TypeId, Vec<Point>> {
+        let mut deps = HashMap::new();
 
-    fn package_name(&self) -> Option<String> {
-        todo!()
-    }
+        for (id, point) in &self.dependencies {
+            deps.entry(*id).or_insert(vec![]).push(*point)
+        }
 
-    fn package_path(&self) -> Option<String> {
-        todo!()
+        deps
     }
 }
 
@@ -87,6 +85,18 @@ impl Index {
         }
     }
 
+    pub fn type_id(&self, name: &str) -> Option<TypeId> {
+        self.type_ids.get(name).map(|id| *id)
+    }
+
+    pub fn get_type(&self, type_id: TypeId) -> Option<&Type> {
+        self.types.get(type_id)
+    }
+
+    pub fn file_path(&self, declaration: &Declaration) -> Option<String> {
+        self.files.get(declaration.file).map(|p| p.clone())
+    }
+
     /// Add a package to the index
     pub fn add_package(&mut self, name: &str, path_prefix: &str) {
         let name = name.to_string();
@@ -104,6 +114,7 @@ impl Index {
         self.packages_by_path.insert(path_prefix, package_id);
     }
 
+    /// Add a type declaration to the index
     pub fn add_declaration(
         &mut self,
         name: &str,
@@ -134,27 +145,18 @@ impl Index {
             dependencies,
         };
 
-        // FIXME
-        // Extensions need to get indexed separately, they make the
-        // name:declaration relationship a 1:many
-        if kind == Kind::Extension {
-            return self.add_reference(name);
-        }
-
         // Create or update the type declaration
 
         match self.type_ids.get(name) {
             Some(&type_id) => {
-                println!("Updating type {} with declarations", name);
-                self.types[type_id].declaration = Some(declaration);
+                self.types[type_id].declarations.push(declaration);
 
                 type_id
             }
             None => {
-                println!("Creating type {} with declaration", name);
                 let t = Type {
                     name: name.to_string(),
-                    declaration: Some(declaration),
+                    declarations: vec![declaration],
                 };
 
                 self.types.push(t);
@@ -168,11 +170,9 @@ impl Index {
         match self.type_ids.get(name) {
             Some(&type_id) => type_id,
             None => {
-                println!("Creating type {} from reference", name);
-
                 let t = Type {
                     name: name.to_string(),
-                    declaration: None,
+                    declarations: vec![],
                 };
 
                 self.types.push(t);

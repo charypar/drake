@@ -4,13 +4,13 @@ mod worker_pool;
 
 use std::{fs, path::PathBuf};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 
 use ignore::{types::TypesBuilder, WalkBuilder};
 use index::Index;
 use parser::{Definition, Tree};
 
-use crate::index::Kind;
+use crate::index::{Declaration, Kind};
 
 // Package definition
 #[derive(Debug)]
@@ -23,6 +23,8 @@ pub struct Package {
 pub struct Drake {
     index: Index,
 }
+
+// TODO make this API work in a library use-case
 
 impl Drake {
     pub fn new() -> Self {
@@ -61,44 +63,80 @@ impl Drake {
         Ok(())
     }
 
-    pub fn package_name(&mut self, path: &str) -> anyhow::Result<()> {
-        let mut builder = TypesBuilder::new();
-        builder
-            .add_defaults()
-            .add("swiftpackage", "Package.swift")?;
+    pub fn print_dependencies(&self, type_name: &str) -> anyhow::Result<()> {
+        let Some(root_id) = self.index.type_id(type_name) else {
+            bail!("Type {} not found.", type_name)
+        };
 
-        let matcher = builder.select("swiftpackage").build()?;
-        let walk = WalkBuilder::new(path).types(matcher).build_parallel();
+        let type_record = self
+            .index
+            .get_type(root_id)
+            .ok_or_else(|| anyhow!("Could not find type #{} in the index", root_id))?;
 
-        let packages = worker_pool::process_files(walk, move |path, parser| {
-            let source = fs::read_to_string(path)?;
-            let tree = parser.parse(source)?;
-            let name = tree.package_name()?;
+        // Print the headline
+        println!(
+            "Type {}{}",
+            type_record.name,
+            if type_record.declarations.is_empty() {
+                ": (unknown)"
+            } else {
+                ":"
+            }
+        );
 
-            Ok(Package {
-                name: name.to_string(),
-                prefix: path
-                    .parent()
-                    .ok_or_else(|| anyhow!("Package manifest has no parent directory??"))?
-                    .to_owned(),
-            })
-        });
+        // Print declarations
+        for declaration in &type_record.declarations {
+            let path = self
+                .index
+                .file_path(declaration)
+                .ok_or_else(|| anyhow!("Could not find path for declaration: {:?}", declaration))?;
 
-        for package in packages {
-            match package {
-                Ok(package) => self
+            let kind = if declaration.kind == Kind::Extension {
+                "extended"
+            } else {
+                "declared"
+            };
+
+            println!(
+                "- {} in {} {}:{} depends on:",
+                kind, path, declaration.point.row, declaration.point.column
+            );
+
+            for (type_id, points) in declaration.dependencies() {
+                if type_id == root_id {
+                    continue;
+                }
+
+                let type_record = self
                     .index
-                    .add_package(&package.name, &package.prefix.to_string_lossy()),
-                Err(e) => eprintln!("Could not process file: {e}"),
+                    .get_type(type_id)
+                    .ok_or_else(|| anyhow!("Could not find type #{} in the index", root_id))?;
+
+                let points_str = points
+                    .iter()
+                    .map(|p| format!("{}:{}", p.row, p.column))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                // Print the headline
+                println!(
+                    "  - {} (at {}){}",
+                    type_record.name,
+                    points_str,
+                    if type_record.declarations.is_empty() {
+                        ": (unknown)"
+                    } else {
+                        ":"
+                    }
+                );
             }
         }
-
-        println!("Done. Index: {:#?}", self.index);
 
         Ok(())
     }
 
-    pub fn types(&mut self, path: &str) -> anyhow::Result<()> {
+    // Builds the type index
+    pub fn scan(&mut self, path: &str) -> anyhow::Result<()> {
         let mut builder = TypesBuilder::new();
         builder.add_defaults();
 
@@ -153,11 +191,46 @@ impl Drake {
             }
         }
 
-        println!("Index: {:#?}", self.index);
+        // FIXME get these stats from the Index
+        println!("Searching {declaration_count} declarations and {references_count} references.");
 
-        println!(
-            "Done. Processed {declaration_count} declarations and {references_count} references."
-        );
+        Ok(())
+    }
+
+    // TODO reuse later?
+    pub fn package_name(&mut self, path: &str) -> anyhow::Result<()> {
+        let mut builder = TypesBuilder::new();
+        builder
+            .add_defaults()
+            .add("swiftpackage", "Package.swift")?;
+
+        let matcher = builder.select("swiftpackage").build()?;
+        let walk = WalkBuilder::new(path).types(matcher).build_parallel();
+
+        let packages = worker_pool::process_files(walk, move |path, parser| {
+            let source = fs::read_to_string(path)?;
+            let tree = parser.parse(source)?;
+            let name = tree.package_name()?;
+
+            Ok(Package {
+                name: name.to_string(),
+                prefix: path
+                    .parent()
+                    .ok_or_else(|| anyhow!("Package manifest has no parent directory??"))?
+                    .to_owned(),
+            })
+        });
+
+        for package in packages {
+            match package {
+                Ok(package) => self
+                    .index
+                    .add_package(&package.name, &package.prefix.to_string_lossy()),
+                Err(e) => eprintln!("Could not process file: {e}"),
+            }
+        }
+
+        println!("Done. Index: {:#?}", self.index);
 
         Ok(())
     }
