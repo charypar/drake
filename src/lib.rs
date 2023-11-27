@@ -63,7 +63,11 @@ impl Drake {
         Ok(())
     }
 
-    pub fn print_dependencies(&self, type_name: &str) -> anyhow::Result<()> {
+    pub fn print_dependencies(
+        &self,
+        type_name: &str,
+        include_external: bool,
+    ) -> anyhow::Result<()> {
         let Some(root_id) = self.index.type_id(type_name) else {
             bail!("Type {} not found.", type_name)
         };
@@ -84,12 +88,18 @@ impl Drake {
             return Ok(());
         }
 
-        self.print_dependency(type_record, &[root_id], 0)?;
+        self.print_dependency(type_record, include_external, &[root_id], 0)?;
 
         Ok(())
     }
 
-    fn print_dependency(&self, a_type: &Type, skip: &[TypeId], depth: usize) -> anyhow::Result<()> {
+    fn print_dependency(
+        &self,
+        a_type: &Type,
+        include_external: bool,
+        skip: &[TypeId],
+        depth: usize,
+    ) -> anyhow::Result<()> {
         let prefix = "  ".repeat(depth);
 
         // Print declarations
@@ -126,24 +136,21 @@ impl Drake {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                // Print the headline
-                println!(
-                    "{}  {} (at {}){}",
-                    prefix,
-                    ref_type.name,
-                    points_str,
-                    if ref_type.declarations.is_empty() {
-                        ": (external)"
-                    } else {
-                        ":"
-                    }
-                );
+                // Print the type header
+                if !ref_type.declarations.is_empty() {
+                    println!("{}  {} (at {}):", prefix, ref_type.name, points_str,);
+                } else if include_external {
+                    println!(
+                        "{}  {} (at {}): (external)",
+                        prefix, ref_type.name, points_str,
+                    );
+                }
 
                 if !ref_type.declarations.is_empty() {
                     let mut ref_skip = skip.to_vec();
                     ref_skip.push(type_id);
 
-                    self.print_dependency(ref_type, &ref_skip, depth + 1)?;
+                    self.print_dependency(ref_type, include_external, &ref_skip, depth + 1)?;
                 }
             }
         }

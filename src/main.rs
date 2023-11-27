@@ -18,6 +18,9 @@ enum Command {
         /// Path to scan
         #[arg(default_value = ".")]
         path: String,
+        /// Include all type dependencies, including ones declared outside the codebase
+        #[arg(long = "all")]
+        all: bool,
     },
     /// Print contents of specific files
     Print {
@@ -39,9 +42,13 @@ fn main() -> anyhow::Result<()> {
     let mut drake = Drake::new();
 
     match &cli.command {
-        Command::Deps { path, type_name } => {
+        Command::Deps {
+            path,
+            type_name,
+            all,
+        } => {
             drake.scan(path)?;
-            drake.print_dependencies(type_name)?;
+            drake.print_dependencies(type_name, *all)?;
         }
         Command::Print {
             path,
