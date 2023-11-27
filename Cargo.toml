@@ -1,6 +1,6 @@
 [package]
 name = "drake"
-version = "0.1.0"
+version = "0.2.0"
 description = "A tree-sitter based codebase dependency explorer"
 repository = "https://github.com/charypar/drake"
 documentation = "https://docs.rs/drake"

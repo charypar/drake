@@ -18,12 +18,13 @@ Drake can be installed with `cargo install`.
 
 In the current version it supports two tasks
 
-- `drake scan [PATH]` finds all swift packages in the given path
+- `drake deps [PATH] <TYPE_NAME>` recursively lists all the types `TYPE_NAME`
+  depends on.
 - `drake print [PATH]` prints the declarations and references in each file.
 
 ### As a library
 
-Cargo docs coming soon.
+Reasonable API and Cargo docs coming soon.
 
 ## License
 
