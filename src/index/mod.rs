@@ -1,7 +1,12 @@
+mod cursor;
+
 use std::collections::HashMap;
 
+use anyhow::anyhow;
 use patricia_tree::GenericPatriciaMap;
 use tree_sitter::Point;
+
+pub use cursor::{IndexCursor, IndexItem};
 
 // TODO consider pros/cons of using Paths and PathBufs
 
@@ -10,10 +15,26 @@ pub type PackageId = usize;
 pub type FileId = usize;
 pub type TypeId = usize;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Type {
     pub name: String,
     pub declarations: Vec<Declaration>, // A type may be extended in multiple places
+}
+
+#[derive(Debug, PartialEq)]
+pub enum TypeOrigin {
+    Local,
+    External,
+}
+
+impl Type {
+    fn origin(&self) -> TypeOrigin {
+        if self.declarations.is_empty() {
+            TypeOrigin::External
+        } else {
+            TypeOrigin::Local
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -32,7 +53,7 @@ pub enum Kind {
 }
 
 /// Type declaration
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Declaration {
     /// Declaration kind
     pub kind: Kind,
@@ -70,8 +91,6 @@ pub struct Index {
     packages_by_path: GenericPatriciaMap<String, PackageId>,
 }
 
-// TODO do I need a builder...?
-
 impl Index {
     pub fn new() -> Self {
         Self {
@@ -85,17 +104,33 @@ impl Index {
         }
     }
 
+    // Reading from index
+
+    /// Geta type ID for a string name
     pub fn type_id(&self, name: &str) -> Option<TypeId> {
-        self.type_ids.get(name).map(|id| *id)
+        self.type_ids.get(name).copied()
     }
 
+    /// Get a type definition for a type ID
     pub fn get_type(&self, type_id: TypeId) -> Option<&Type> {
         self.types.get(type_id)
     }
 
+    /// Find a file path where declaration was made
     pub fn file_path(&self, declaration: &Declaration) -> Option<String> {
-        self.files.get(declaration.file).map(|p| p.clone())
+        self.files.get(declaration.file).cloned()
     }
+
+    pub fn walk(&self, type_name: &str) -> anyhow::Result<IndexCursor> {
+        let type_id = self
+            .type_id(type_name)
+            .ok_or_else(|| anyhow!("Type name {} not found in the index.", type_name))?;
+
+        Ok(IndexCursor::new(self, type_id))
+    }
+
+    // Building the index
+    // TODO do I need an IndexBuilder...?
 
     /// Add a package to the index
     pub fn add_package(&mut self, name: &str, path_prefix: &str) {
@@ -161,7 +196,10 @@ impl Index {
 
                 self.types.push(t);
 
-                self.types.len() - 1
+                let type_id = self.types.len() - 1;
+                self.type_ids.insert(name.to_string(), type_id);
+
+                type_id
             }
         }
     }
@@ -178,7 +216,6 @@ impl Index {
                 self.types.push(t);
 
                 let type_id = self.types.len() - 1;
-
                 self.type_ids.insert(name.to_string(), type_id);
 
                 type_id

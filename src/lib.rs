@@ -7,10 +7,11 @@ use std::{fs, path::PathBuf};
 use anyhow::{anyhow, bail};
 
 use ignore::{types::TypesBuilder, WalkBuilder};
-use index::Index;
+use index::{Declaration, Index, IndexItem};
 use parser::{Definition, Tree};
+use tree_sitter::Point;
 
-use crate::index::{Kind, Type, TypeId};
+use crate::index::{IndexCursor, Kind, Type, TypeId, TypeOrigin};
 
 // Package definition
 #[derive(Debug)]
@@ -68,90 +69,42 @@ impl Drake {
         type_name: &str,
         include_external: bool,
     ) -> anyhow::Result<()> {
-        let Some(root_id) = self.index.type_id(type_name) else {
-            bail!("Type {} not found.", type_name)
-        };
+        // print type
 
-        let type_record = self
-            .index
-            .get_type(root_id)
-            .ok_or_else(|| anyhow!("Could not find type #{} in the index", root_id))?;
+        for (item, depth) in self.index.walk(type_name)? {
+            let prefix = "  ".repeat(depth);
+            match item {
+                IndexItem::Type(name, origin) => {
+                    // Print type
+                    // let points = points
+                    //     .iter()
+                    //     .map(|p| format!("{}:{}", p.row, p.column))
+                    //     .collect::<Vec<_>>()
+                    //     .join(", ");
 
-        // Print the headline
-        println!("\nType {}:", type_record.name,);
+                    let postfix = match origin {
+                        TypeOrigin::External => " (external)",
+                        TypeOrigin::Local => ":",
+                    };
 
-        if type_record.declarations.is_empty() {
-            println!(
-                "Type {} is defined outside of the specified path.",
-                type_record.name
-            );
-            return Ok(());
-        }
-
-        self.print_dependency(type_record, include_external, &[root_id], 0)?;
-
-        Ok(())
-    }
-
-    fn print_dependency(
-        &self,
-        a_type: &Type,
-        include_external: bool,
-        skip: &[TypeId],
-        depth: usize,
-    ) -> anyhow::Result<()> {
-        let prefix = "  ".repeat(depth);
-
-        // Print declarations
-        for declaration in &a_type.declarations {
-            let path = self
-                .index
-                .file_path(declaration)
-                .ok_or_else(|| anyhow!("Could not find path for declaration: {:?}", declaration))?;
-
-            let kind = if declaration.kind == Kind::Extension {
-                "extended"
-            } else {
-                "declared"
-            };
-
-            println!(
-                "{}- {} in {} {}:{}, using types:",
-                prefix, kind, path, declaration.point.row, declaration.point.column
-            );
-
-            for (type_id, points) in declaration.dependencies() {
-                if skip.contains(&type_id) {
-                    continue;
+                    println!("{}{} at {}{}", prefix, name, "(! somewhere)", postfix);
                 }
+                IndexItem::Declaration(declaration) => {
+                    let kind = if declaration.kind == Kind::Extension {
+                        "extended"
+                    } else {
+                        "declared"
+                    };
 
-                let ref_type = self
-                    .index
-                    .get_type(type_id)
-                    .ok_or_else(|| anyhow!("Could not find type #{} in the index", type_id))?;
+                    let point = format!("{}:{}", declaration.point.row, declaration.point.column);
+                    let path = self
+                        .index
+                        .file_path(&declaration)
+                        .expect("index refers to an unknown file");
 
-                let points_str = points
-                    .iter()
-                    .map(|p| format!("{}:{}", p.row, p.column))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                // Print the type header
-                if !ref_type.declarations.is_empty() {
-                    println!("{}  {} (at {}):", prefix, ref_type.name, points_str,);
-                } else if include_external {
-                    println!(
-                        "{}  {} (at {}): (external)",
-                        prefix, ref_type.name, points_str,
-                    );
+                    println!("{}{} in {} {}, using types:", prefix, kind, path, point)
                 }
-
-                if !ref_type.declarations.is_empty() {
-                    let mut ref_skip = skip.to_vec();
-                    ref_skip.push(type_id);
-
-                    self.print_dependency(ref_type, include_external, &ref_skip, depth + 1)?;
-                }
+                IndexItem::Dependency(_, _) => todo!(),
             }
         }
 
