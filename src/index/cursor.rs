@@ -6,9 +6,9 @@ use super::{Declaration, Index, Type, TypeId, TypeOrigin};
 
 #[derive(Debug, PartialEq)]
 pub enum IndexItem<'a> {
-    Type(&'a str, TypeOrigin),
+    Type(TypeId, &'a str, TypeOrigin),
     Declaration(&'a Declaration),
-    Dependency(&'a str, Point),
+    Dependency(TypeId, &'a str, Point),
 }
 
 /// A stateful object representing a search through the index graph
@@ -52,7 +52,7 @@ impl<'a> IndexCursor<'a> {
 
     pub fn next_item(&mut self) -> Option<(IndexItem<'a>, usize)> {
         loop {
-            let Some( top) = self.path.last() else {
+            let Some(top) = self.path.last() else {
                 return None;
             };
             let Some(current_type) = self.current_type() else {
@@ -63,10 +63,9 @@ impl<'a> IndexCursor<'a> {
 
             match top {
                 Segment::Type(type_id) => {
-                    println!("\nVisiting type {}.", current_type.name);
+                    let type_id = *type_id;
 
-                    if self.visited_types.contains(type_id) {
-                        println!("Type {type_id} already visited, backtracking");
+                    if self.visited_types.contains(&type_id) {
                         self.path.pop();
 
                         if let Some(Segment::Dependency(idx)) = self.path.pop() {
@@ -75,13 +74,11 @@ impl<'a> IndexCursor<'a> {
                         continue;
                     }
 
-                    self.visited_types.insert(*type_id);
+                    self.visited_types.insert(type_id);
 
                     if !current_type.declarations.is_empty() {
-                        println!("Will visit declaration 0");
                         self.path.push(Segment::Declaration(0));
                     } else {
-                        println!("No declarations, backtracking");
                         self.path.pop();
 
                         if let Some(Segment::Dependency(idx)) = self.path.pop() {
@@ -89,40 +86,32 @@ impl<'a> IndexCursor<'a> {
                         }
                     }
 
-                    println!("Emit type");
                     return Some((
-                        IndexItem::Type(current_type.name.as_ref(), current_type.origin()),
+                        IndexItem::Type(type_id, current_type.name.as_ref(), current_type.origin()),
                         depth,
                     ));
                 }
                 Segment::Declaration(idx) => {
-                    println!("\nVisiting declaration {idx}.");
                     let Some(declaration) = current_type.declarations.get(*idx) else {
                         // Declaration index has run over, backtrack
-                        println!("Declaration {idx} doesn't exist, backtracking.");
                         self.path.pop();
                         continue;
                     };
 
                     if !declaration.dependencies.is_empty() {
-                        println!("Will vist dependency 0");
                         self.path.push(Segment::Dependency(0));
                     } else if current_type.declarations.len() > *idx + 1 {
                         let next_declaration_index = idx + 1;
-                        println!("No dependencies, will visit sibling declaration {next_declaration_index}");
 
                         self.path.pop();
                         self.path.push(Segment::Declaration(next_declaration_index));
                     } else {
-                        println!("No dependencies or declarations, backtracking.");
                         self.path.pop();
                     }
 
-                    println!("Emit declaration");
                     return Some((IndexItem::Declaration(declaration), depth));
                 }
                 Segment::Dependency(idx) => {
-                    println!("\nVisiting dependency {idx}.");
                     let Some(Segment::Declaration(dec_idx)) = parent else {
                         unreachable!("Parent of a dependency is not a declaration!");
                     };
@@ -132,7 +121,6 @@ impl<'a> IndexCursor<'a> {
                     };
 
                     let Some((type_id, point)) = declaration.dependencies.get(*idx) else {
-                        println!("\nDependency {idx} not found, backtracing.");
                         // Dependency index has run over, backtrack
                         let next_declaration_index = dec_idx + 1;
                         self.path.pop();
@@ -148,19 +136,18 @@ impl<'a> IndexCursor<'a> {
 
                     if !self.visited_types.contains(type_id) {
                         // Visit the type of the dependency
-                        println!("\nWill vist type {type_id}.");
-
                         self.path.push(Segment::Type(*type_id));
                     } else {
                         let next_dependency_index = idx + 1;
 
-                        println!("\nWill dependency {next_dependency_index}.");
                         self.path.pop();
                         self.path.push(Segment::Dependency(next_dependency_index))
                     }
 
-                    println!("Emit dependency");
-                    return Some((IndexItem::Dependency(type_ref.name.as_ref(), *point), depth));
+                    return Some((
+                        IndexItem::Dependency(*type_id, type_ref.name.as_ref(), *point),
+                        depth,
+                    ));
                 }
             };
         }
@@ -194,7 +181,7 @@ impl<'a> Iterator for IndexCursor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::{assert_eq, assert_ne};
+    use pretty_assertions::assert_eq;
 
     use super::*;
     use crate::index::{Index, Kind};
@@ -205,7 +192,7 @@ mod tests {
         index.add_reference("MyType");
 
         let actual: Vec<_> = index.walk("MyType").unwrap().collect();
-        let expected = vec![(IndexItem::Type("MyType", TypeOrigin::External), 0)];
+        let expected = vec![(IndexItem::Type(0, "MyType", TypeOrigin::External), 0)];
 
         assert_eq!(actual, expected)
     }
@@ -230,7 +217,7 @@ mod tests {
 
         let actual: Vec<_> = index.walk("MyType").unwrap().collect();
         let expected = vec![
-            (IndexItem::Type("MyType", TypeOrigin::Local), 0),
+            (IndexItem::Type(0, "MyType", TypeOrigin::Local), 0),
             (IndexItem::Declaration(&declaration), 1),
         ];
 
@@ -270,7 +257,7 @@ mod tests {
 
         let actual: Vec<_> = index.walk("MyType").unwrap().collect();
         let expected = vec![
-            (IndexItem::Type("MyType", TypeOrigin::Local), 0),
+            (IndexItem::Type(0, "MyType", TypeOrigin::Local), 0),
             (IndexItem::Declaration(&declaration), 1),
             (IndexItem::Declaration(&extension), 1),
         ];
@@ -289,20 +276,19 @@ mod tests {
             &[("OtherType", &Point::new(3, 10))],
         );
 
-        let other_type_id = index.type_id("OtherType").unwrap();
         let declaration = Declaration {
             kind: Kind::Enum,
             point: Point::new(10, 20),
             file: 0,
-            dependencies: vec![(other_type_id, Point::new(3, 10))],
+            dependencies: vec![(0, Point::new(3, 10))],
         };
 
         let actual: Vec<_> = index.walk("MyType").unwrap().collect();
         let expected = vec![
-            (IndexItem::Type("MyType", TypeOrigin::Local), 0),
+            (IndexItem::Type(1, "MyType", TypeOrigin::Local), 0),
             (IndexItem::Declaration(&declaration), 1),
-            (IndexItem::Dependency("OtherType", Point::new(3, 10)), 2),
-            (IndexItem::Type("OtherType", TypeOrigin::External), 3),
+            (IndexItem::Dependency(0, "OtherType", Point::new(3, 10)), 2),
+            (IndexItem::Type(0, "OtherType", TypeOrigin::External), 3),
         ];
 
         assert_eq!(actual, expected)
@@ -342,10 +328,10 @@ mod tests {
 
         let actual: Vec<_> = index.walk("MyType").unwrap().collect();
         let expected = vec![
-            (IndexItem::Type("MyType", TypeOrigin::Local), 0),
+            (IndexItem::Type(1, "MyType", TypeOrigin::Local), 0),
             (IndexItem::Declaration(&declaration_1), 1),
-            (IndexItem::Dependency("OtherType", Point::new(3, 10)), 2),
-            (IndexItem::Type("OtherType", TypeOrigin::Local), 3),
+            (IndexItem::Dependency(0, "OtherType", Point::new(3, 10)), 2),
+            (IndexItem::Type(0, "OtherType", TypeOrigin::Local), 3),
             (IndexItem::Declaration(&declaration_2), 4),
         ];
 
@@ -380,15 +366,18 @@ mod tests {
 
         let actual: Vec<_> = index.walk("MyType").unwrap().collect();
         let expected = vec![
-            (IndexItem::Type("MyType", TypeOrigin::Local), 0),
+            (IndexItem::Type(2, "MyType", TypeOrigin::Local), 0),
             (IndexItem::Declaration(&declaration), 1),
-            (IndexItem::Dependency("OtherType", Point::new(3, 10)), 2),
-            (IndexItem::Type("OtherType", TypeOrigin::External), 3),
+            (IndexItem::Dependency(0, "OtherType", Point::new(3, 10)), 2),
+            (IndexItem::Type(0, "OtherType", TypeOrigin::External), 3),
             (
-                IndexItem::Dependency("YetAnotherType", Point::new(7, 10)),
+                IndexItem::Dependency(1, "YetAnotherType", Point::new(7, 10)),
                 2,
             ),
-            (IndexItem::Type("YetAnotherType", TypeOrigin::External), 3),
+            (
+                IndexItem::Type(1, "YetAnotherType", TypeOrigin::External),
+                3,
+            ),
         ];
 
         assert_eq!(actual, expected)
@@ -460,27 +449,36 @@ mod tests {
 
         let actual: Vec<_> = index.walk("MyType").unwrap().collect();
         let expected = vec![
-            (IndexItem::Type("MyType", TypeOrigin::Local), 0),
+            (IndexItem::Type(2, "MyType", TypeOrigin::Local), 0),
             (IndexItem::Declaration(&declaration_1), 1),
-            (IndexItem::Dependency("ExternalType", Point::new(3, 10)), 2),
-            (IndexItem::Type("ExternalType", TypeOrigin::External), 3),
-            (IndexItem::Dependency("OtherType", Point::new(8, 10)), 2),
-            (IndexItem::Type("OtherType", TypeOrigin::Local), 3),
+            (
+                IndexItem::Dependency(0, "ExternalType", Point::new(3, 10)),
+                2,
+            ),
+            (IndexItem::Type(0, "ExternalType", TypeOrigin::External), 3),
+            (IndexItem::Dependency(1, "OtherType", Point::new(8, 10)), 2),
+            (IndexItem::Type(1, "OtherType", TypeOrigin::Local), 3),
             (IndexItem::Declaration(&declaration_2), 4),
-            (IndexItem::Dependency("ExternalType", Point::new(4, 10)), 5),
-            (IndexItem::Dependency("OneMoreType", Point::new(5, 10)), 5),
-            (IndexItem::Type("OneMoreType", TypeOrigin::Local), 6),
+            (
+                IndexItem::Dependency(0, "ExternalType", Point::new(4, 10)),
+                5,
+            ),
+            (
+                IndexItem::Dependency(3, "OneMoreType", Point::new(5, 10)),
+                5,
+            ),
+            (IndexItem::Type(3, "OneMoreType", TypeOrigin::Local), 6),
             (IndexItem::Declaration(&declaration_3), 7),
             (
-                IndexItem::Dependency("AnotherExternalType", Point::new(6, 10)),
+                IndexItem::Dependency(4, "AnotherExternalType", Point::new(6, 10)),
                 8,
             ),
             (
-                IndexItem::Type("AnotherExternalType", TypeOrigin::External),
+                IndexItem::Type(4, "AnotherExternalType", TypeOrigin::External),
                 9,
             ),
             (
-                IndexItem::Dependency("AnotherExternalType", Point::new(6, 10)),
+                IndexItem::Dependency(4, "AnotherExternalType", Point::new(6, 10)),
                 5,
             ),
         ];
@@ -545,23 +543,32 @@ mod tests {
 
         let actual: Vec<_> = index.walk("MyType").unwrap().collect();
         let expected = vec![
-            (IndexItem::Type("MyType", TypeOrigin::Local), 0),
+            (IndexItem::Type(1, "MyType", TypeOrigin::Local), 0),
             (IndexItem::Declaration(&declaration_1), 1),
-            (IndexItem::Dependency("OtherType", Point::new(8, 10)), 2),
-            (IndexItem::Type("OtherType", TypeOrigin::External), 3),
+            (IndexItem::Dependency(0, "OtherType", Point::new(8, 10)), 2),
+            (IndexItem::Type(0, "OtherType", TypeOrigin::External), 3),
             (IndexItem::Declaration(&declaration_2), 1),
-            (IndexItem::Dependency("ExternalType", Point::new(4, 10)), 2),
-            (IndexItem::Type("ExternalType", TypeOrigin::External), 3),
-            (IndexItem::Dependency("OneMoreType", Point::new(5, 10)), 2),
-            (IndexItem::Type("OneMoreType", TypeOrigin::Local), 3),
-            (IndexItem::Declaration(&declaration_3), 4),
-            (IndexItem::Dependency("ExternalType", Point::new(6, 10)), 5),
             (
-                IndexItem::Dependency("AnotherExternalType", Point::new(6, 10)),
+                IndexItem::Dependency(2, "ExternalType", Point::new(4, 10)),
+                2,
+            ),
+            (IndexItem::Type(2, "ExternalType", TypeOrigin::External), 3),
+            (
+                IndexItem::Dependency(3, "OneMoreType", Point::new(5, 10)),
+                2,
+            ),
+            (IndexItem::Type(3, "OneMoreType", TypeOrigin::Local), 3),
+            (IndexItem::Declaration(&declaration_3), 4),
+            (
+                IndexItem::Dependency(2, "ExternalType", Point::new(6, 10)),
+                5,
+            ),
+            (
+                IndexItem::Dependency(4, "AnotherExternalType", Point::new(6, 10)),
                 2,
             ),
             (
-                IndexItem::Type("AnotherExternalType", TypeOrigin::External),
+                IndexItem::Type(4, "AnotherExternalType", TypeOrigin::External),
                 3,
             ),
         ];
@@ -615,15 +622,21 @@ mod tests {
 
         let actual: Vec<_> = index.walk("MyType").unwrap().collect();
         let expected = vec![
-            (IndexItem::Type("MyType", TypeOrigin::Local), 0),
+            (IndexItem::Type(2, "MyType", TypeOrigin::Local), 0),
             (IndexItem::Declaration(&declaration_1), 1),
-            (IndexItem::Dependency("ExternalType", Point::new(7, 10)), 2),
-            (IndexItem::Type("ExternalType", TypeOrigin::External), 3),
-            (IndexItem::Dependency("OtherType", Point::new(3, 10)), 2),
-            (IndexItem::Type("OtherType", TypeOrigin::Local), 3),
+            (
+                IndexItem::Dependency(0, "ExternalType", Point::new(7, 10)),
+                2,
+            ),
+            (IndexItem::Type(0, "ExternalType", TypeOrigin::External), 3),
+            (IndexItem::Dependency(1, "OtherType", Point::new(3, 10)), 2),
+            (IndexItem::Type(1, "OtherType", TypeOrigin::Local), 3),
             (IndexItem::Declaration(&declaration_2), 4),
-            (IndexItem::Dependency("MyType", Point::new(7, 10)), 5),
-            (IndexItem::Dependency("ExternalType", Point::new(3, 10)), 5),
+            (IndexItem::Dependency(2, "MyType", Point::new(7, 10)), 5),
+            (
+                IndexItem::Dependency(0, "ExternalType", Point::new(3, 10)),
+                5,
+            ),
         ];
 
         assert_eq!(actual, expected);

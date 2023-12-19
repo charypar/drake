@@ -69,42 +69,60 @@ impl Drake {
         type_name: &str,
         include_external: bool,
     ) -> anyhow::Result<()> {
-        // print type
+        let mut current_declaration: Option<&Declaration> = None;
 
         for (item, depth) in self.index.walk(type_name)? {
-            let prefix = "  ".repeat(depth);
-            match item {
-                IndexItem::Type(name, origin) => {
-                    // Print type
-                    // let points = points
-                    //     .iter()
-                    //     .map(|p| format!("{}:{}", p.row, p.column))
-                    //     .collect::<Vec<_>>()
-                    //     .join(", ");
+            let d = depth - (depth / 3);
+            let prefix = "  ".repeat(d);
 
+            match item {
+                IndexItem::Type(id, name, origin) => {
                     let postfix = match origin {
                         TypeOrigin::External => " (external)",
                         TypeOrigin::Local => ":",
                     };
 
-                    println!("{}{} at {}{}", prefix, name, "(! somewhere)", postfix);
+                    if origin == TypeOrigin::External && !include_external {
+                        continue;
+                    }
+
+                    if let Some(declaration) = current_declaration {
+                        let locations = if let Some(points) = declaration.dependencies().get(&id) {
+                            let ps = points
+                                .iter()
+                                .map(|point| format!("{}:{}", point.row, point.column))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+
+                            format!(" ({})", ps)
+                        } else {
+                            "".to_string()
+                        };
+
+                        println!("{}- {}{}{}", prefix, name, locations, postfix);
+                    } else {
+                        println!("{}- {}{}", prefix, name, postfix);
+                    }
                 }
                 IndexItem::Declaration(declaration) => {
-                    let kind = if declaration.kind == Kind::Extension {
-                        "extended"
-                    } else {
-                        "declared"
-                    };
+                    current_declaration = Some(declaration);
 
+                    let kind = match declaration.kind {
+                        Kind::Struct => "struct declared",
+                        Kind::Enum => "enum declared",
+                        Kind::Class => "class declared",
+                        Kind::Protocol => "protocol declared",
+                        Kind::Extension => "extended",
+                    };
                     let point = format!("{}:{}", declaration.point.row, declaration.point.column);
                     let path = self
                         .index
-                        .file_path(&declaration)
+                        .file_path(declaration)
                         .expect("index refers to an unknown file");
 
                     println!("{}{} in {} {}, using types:", prefix, kind, path, point)
                 }
-                IndexItem::Dependency(_, _) => todo!(),
+                _ => (),
             }
         }
 
